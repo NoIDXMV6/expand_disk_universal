@@ -1,4 +1,4 @@
-# expand_disk_universal
+# expand_disk
 Скрипт для увеличения раздела диска (MBR/GPT/LVM)
 ## Как запустить:
 
