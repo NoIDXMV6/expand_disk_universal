@@ -26,7 +26,7 @@
 
 1. Скачайте скрипт:
    ```bash
-   wget https://raw.githubusercontent.com/ваш-репозиторий/expand_disk.sh
+   wget https://github.com/NoIDXMV6/expand_disk_universal/raw/refs/heads/main/expand_disk.sh
    ```
    или создайте файл вручную.
 
