@@ -26,13 +26,13 @@
 
 1. Скачайте скрипт:
    ```bash
-   wget https://raw.githubusercontent.com/ваш-репозиторий/expand_disk_universal.sh
+   wget https://raw.githubusercontent.com/ваш-репозиторий/expand_disk.sh
    ```
    или создайте файл вручную.
 
 2. Дайте права на выполнение:
    ```bash
-   chmod +x expand_disk_universal.sh
+   chmod +x expand_disk.sh
    ```
 
 ## Использование
@@ -40,7 +40,7 @@
 Запустите от root:
 
 ```bash
-sudo ./expand_disk_universal.sh
+sudo ./expand_disk.sh
 ```
 
 Скрипт последовательно запросит:
