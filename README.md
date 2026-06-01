@@ -25,23 +25,23 @@
 ## Установка
 
 1. Скачайте скрипт:
-   '''bash
+   ```bash
    wget https://raw.githubusercontent.com/ваш-репозиторий/expand_disk_universal.sh
-   '''
+   ```
    или создайте файл вручную.
 
 2. Дайте права на выполнение:
-   '''bash
+   ```bash
    chmod +x expand_disk_universal.sh
-   '''
+   ```
 
 ## Использование
 
 Запустите от root:
 
-'''bash
+```bash
 sudo ./expand_disk_universal.sh
-'''
+```
 
 Скрипт последовательно запросит:
 - Имя диска (например, sda, sdb, nvme0n1)
@@ -52,7 +52,7 @@ sudo ./expand_disk_universal.sh
 
 ### Пример работы
 
-'''bash
+```bash
 === Универсальный скрипт расширения диска (LVM и обычные разделы) ===
 Доступные диски:
 NAME  SIZE TYPE MODEL
@@ -80,7 +80,7 @@ CHANGED: partition=3 start=1050624 old: size=66058207 new: size=67108830
 resize2fs 1.47.0 (5-Feb-2023)
 Filesystem at /dev/mapper/pbs-root is now 7994368 (4k) blocks long.
 === Готово! Новое состояние диска ===
-'''
+```
 
 ## Алгоритм работы
 
