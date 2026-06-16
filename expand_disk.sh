@@ -7,16 +7,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Вывод в stderr с цветом
 echo_err() { echo -e "$*" >&2; }
 
-# Проверка root
 if [[ $EUID -ne 0 ]]; then
     echo_err "${RED}Запустите с sudo.${NC}"
     exit 1
 fi
 
-# Установка пакетов (тихо)
 install_if_missing() {
     local pkg=$1 cmd=$2
     if ! command -v "$cmd" &> /dev/null; then
@@ -38,20 +35,19 @@ install_if_missing "parted" "parted"
 install_if_missing "gdisk" "sgdisk"
 install_if_missing "cloud-guest-utils" "growpart" || install_if_missing "cloud-utils-growpart" "growpart"
 
-# ---- Функции работы с диском ----
-
 get_disk_size_bytes() {
     blockdev --getsize64 "/dev/$1"
 }
 
 get_free_space_after_last_partition() {
     local disk=$1
-    local last_part=$(lsblk -l -o NAME -n "/dev/$disk" | grep -E "^${disk}[0-9]+$|^${disk}p[0-9]+$" | tail -1)
+    # Определяем последний раздел по физическому смещению (не по имени)
+    local last_part=$(parted -s "/dev/$disk" unit B print 2>/dev/null | grep -E "^ [0-9]+" | sort -k3 -n | tail -1 | awk '{print $1}')
     if [[ -z "$last_part" ]]; then
         echo "0"
         return
     fi
-    local part_end_bytes=$(parted "/dev/$disk" unit B print 2>/dev/null | grep "^ $(echo "$last_part" | grep -oE '[0-9]+$')" | awk '{print $3}' | sed 's/B//')
+    local part_end_bytes=$(parted "/dev/$disk" unit B print 2>/dev/null | grep "^ $last_part" | awk '{print $3}' | sed 's/B//')
     local disk_size=$(get_disk_size_bytes "$disk")
     echo $((disk_size - part_end_bytes))
 }
@@ -86,21 +82,54 @@ get_partitions() {
 
 is_last_partition() {
     local disk=$1 part_num=$2
-    local last=$(get_partitions "$disk" | tail -1 | grep -oE '[0-9]+$')
+    # Определяем последний по физическому смещению
+    local last=$(parted -s "/dev/$disk" unit B print 2>/dev/null | grep -E "^ [0-9]+" | sort -k3 -n | tail -1 | awk '{print $1}')
     [[ "$part_num" -eq "$last" ]]
 }
 
 get_next_partition() {
     local disk=$1 part_num=$2
-    get_partitions "$disk" | grep -oE '[0-9]+$' | awk -v p="$part_num" '$1>p {print $1; exit}'
+    # Возвращает следующий раздел по физическому смещению (не по номеру)
+    parted -s "/dev/$disk" unit B print 2>/dev/null | grep -E "^ [0-9]+" | sort -k3 -n | awk -v p="$part_num" '$1>p {print $1; exit}'
 }
 
 get_fs_type() {
     lsblk -n -o FSTYPE "/dev/$1" | head -1
 }
 
+expand_extended_if_needed() {
+    local disk=$1 part_num=$2
+    local part_type
+    part_type=$(parted -s "/dev/$disk" print 2>/dev/null | awk -v n="$part_num" '$1==n {print $5}')
+    if [[ "$part_type" == "logical" ]]; then
+        local ext_num
+        ext_num=$(parted -s "/dev/$disk" print 2>/dev/null | awk '$5=="extended" {print $1}')
+        if [[ -n "$ext_num" ]]; then
+            echo_err "${YELLOW}Расширение extended-раздела /dev/${disk}${ext_num} до конца диска...${NC}"
+            if ! parted -s "/dev/$disk" resizepart "$ext_num" 100% 2>/dev/null; then
+                echo_err "${RED}Не удалось расширить extended-раздел: возможно, после него есть primary-раздел, мешающий расширению.${NC}"
+                # Найдём primary-раздел, который идёт после extended
+                local next_primary=$(parted -s "/dev/$disk" unit B print 2>/dev/null | grep -E "^ [0-9]+" | sort -k3 -n | awk -v e="$ext_num" '$1>e && $5=="primary" {print $1; exit}')
+                if [[ -n "$next_primary" ]]; then
+                    echo_err "${YELLOW}Рекомендуется расширить primary-раздел /dev/${disk}${next_primary} (он является последним перед свободным местом).${NC}"
+                    echo_err "${YELLOW}Запустите скрипт заново и выберите раздел ${next_primary}.${NC}"
+                else
+                    echo_err "${RED}Не найден подходящий primary-раздел для расширения.${NC}"
+                fi
+                exit 1
+            fi
+            partprobe "/dev/$disk"
+            sleep 2
+        else
+            echo_err "${RED}Не найден extended-раздел для логического раздела $part_num.${NC}"
+            exit 1
+        fi
+    fi
+}
+
 grow_partition() {
     local disk=$1 part_num=$2
+    expand_extended_if_needed "$disk" "$part_num"
     echo_err "${GREEN}Расширение раздела /dev/$disk$part_num на всё свободное место...${NC}"
     local output
     set +e
@@ -144,12 +173,12 @@ relocate_swap() {
     local swap_part="/dev/${disk}${swap_num}"
     local swap_uuid=$(blkid -s UUID -o value "$swap_part" 2>/dev/null || true)
     local swap_start=$(parted "/dev/$disk" unit s print | grep "^ ${swap_num}" | awk '{print $2}' | sed 's/s//')
-    
+
     echo_err "${YELLOW}Будет удалён swap-раздел $swap_part, расширен /dev/${disk}${target_num}, затем swap создан в конце диска.${NC}"
     echo -n -e "${YELLOW}Продолжить? (y/n): ${NC}" >&2
     read -r confirm
     [[ "$confirm" == "y" ]] || exit 1
-    
+
     swapoff "$swap_part" 2>/dev/null || true
     cp /etc/fstab /etc/fstab.bak.$(date +%Y%m%d_%H%M%S)
     sed -i "/$(basename "$swap_part")\|$swap_uuid/d" /etc/fstab
@@ -167,18 +196,17 @@ relocate_swap() {
     echo_err "${GREEN}Swap перемещён в конец диска.${NC}"
 }
 
-# ---- Главная функция ----
 main() {
     echo_err "${GREEN}=== Универсальный скрипт расширения диска (LVM и обычные разделы) ===${NC}"
-    
+
     disk=$(select_disk)
     echo_err "${BLUE}Работаем с диском: /dev/$disk${NC}"
-    
+
     check_expand_possible "$disk"
-    
+
     echo_err "${BLUE}Текущие разделы:${NC}"
     lsblk "/dev/$disk" >&2
-    
+
     echo -n -e "${YELLOW}Введите номер раздела для расширения (например, 3): ${NC}" >&2
     read -r target_num
     target_part="/dev/${disk}${target_num}"
@@ -186,15 +214,15 @@ main() {
         echo_err "${RED}Раздел $target_part не существует.${NC}"
         exit 1
     fi
-    
+
     is_lvm=$(blkid "$target_part" | grep -q "LVM2_member" && echo "yes" || echo "no")
-    
+
     if ! is_last_partition "$disk" "$target_num"; then
         next_num=$(get_next_partition "$disk" "$target_num")
         next_part="/dev/${disk}${next_num}"
-        next_fs=$(get_fs_type "$next_part")
+        next_fs=$(get_fs_type "${disk}${next_num}")
         echo_err "${YELLOW}Внимание: раздел $target_num не последний. После него идёт раздел $next_num (ФС: $next_fs).${NC}"
-        
+
         if [[ "$next_fs" == "swap" ]]; then
             echo_err "Выберите действие:"
             echo "  1) Расширить последний раздел (swap)"
@@ -230,13 +258,13 @@ main() {
         partprobe "/dev/$disk"
         sleep 2
     fi
-    
+
     if [[ "$is_lvm" == "yes" ]]; then
         expand_lvm "${disk}${target_num}"
     else
         expand_regular_fs "${disk}${target_num}"
     fi
-    
+
     echo_err "${GREEN}=== Готово! Новое состояние диска ===${NC}"
     lsblk "/dev/$disk" >&2
 }
